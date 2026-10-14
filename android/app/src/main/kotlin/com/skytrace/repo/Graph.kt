@@ -2,45 +2,63 @@ package com.skytrace.repo
 
 import com.skytrace.adblock.AdBlock
 import com.skytrace.bubble.BubbleController
+
 import android.content.Context
 import com.skytrace.cert.CertManager
-import com.skytrace.proxy.LocalProxyEngine
+import com.skytrace.proxy.ReplayClient
 import com.skytrace.rule.BreakpointManager
 import com.skytrace.rule.RewriteEngine
+import com.skytrace.vpn.UidResolver
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 object Graph {
-    lateinit var app: Context
-        private set
+    private var initialized = false
+    private val lock = Any()
+
     lateinit var settings: SettingsStore
         private set
     lateinit var repository: TrafficRepository
         private set
     lateinit var certs: CertManager
         private set
-    lateinit var rules: RewriteEngine
+    lateinit var rewrite: RewriteEngine
         private set
     lateinit var breakpoints: BreakpointManager
         private set
+    lateinit var uids: UidResolver
+        private set
+    lateinit var replay: ReplayClient
+        private set
 
-    @Volatile
-    private var initialized = false
+    val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun init(context: Context) {
-        if (initialized) return
-        synchronized(this) {
+        synchronized(lock) {
             if (initialized) return
-            app = context.applicationContext
+            val app = context.applicationContext
             settings = SettingsStore(app)
             repository = TrafficRepository(app)
             certs = CertManager(app)
-            rules = RewriteEngine()
+            rewrite = RewriteEngine()
             breakpoints = BreakpointManager()
-            rules.load(repository.listRules())
-            breakpoints.load(repository.listBreakpoints())
+            uids = UidResolver(app)
+            replay = ReplayClient(repository, settings)
             breakpoints.timeoutSeconds = settings.breakpointTimeoutSec
             AdBlock.enabled = settings.adBlockEnabled
             BubbleController.init(app)
             initialized = true
+        }
+        reloadRules()
+    }
+
+    fun reloadRules() {
+        scope.launch {
+            rewrite.load(repository.listRules())
+            breakpoints.load(repository.listBreakpoints())
+            breakpoints.timeoutSeconds = settings.breakpointTimeoutSec
         }
     }
 }
